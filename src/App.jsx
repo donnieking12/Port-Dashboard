@@ -1,8 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { Truck, Package, AlertCircle, TrendingUp, Calendar, DollarSign, Wrench, Users } from 'lucide-react';
+import { Truck, Package, AlertCircle, TrendingUp, Calendar, DollarSign, Wrench, Users, LogOut } from 'lucide-react';
+import { useAuth } from './AuthContext';
+import ProtectedRoute from './ProtectedRoute';
+import { supabase } from './supabaseClient';
 
-// Mock Data
+// Mock Data (will be replaced with real data from Supabase)
 const mockVehicles = [
   { id: 1, vehicle_number: 'TRK-001', license_plate: 'AB-1234-CI', ownership: 'company', status: 'active', cargo_capability: 'container-40ft', capacity_tons: 30, make: 'Mercedes-Benz' },
   { id: 2, vehicle_number: 'TRK-002', license_plate: 'AB-1235-CI', ownership: 'company', status: 'active', cargo_capability: 'container-20ft', capacity_tons: 25, make: 'Volvo' },
@@ -36,12 +39,151 @@ const mockMaintenance = [
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
-function App() {
-  const [vehicles] = useState(mockVehicles);
-  const [operations] = useState(mockOperations);
-  const [subcontractors] = useState(mockSubcontractors);
-  const [maintenance] = useState(mockMaintenance);
+function AppContent() {
+  const { signOut, user } = useAuth();
+  const [vehicles, setVehicles] = useState(mockVehicles);
+  const [operations, setOperations] = useState(mockOperations);
+  const [subcontractors, setSubcontractors] = useState(mockSubcontractors);
+  const [maintenance, setMaintenance] = useState(mockMaintenance);
   const [activeTab, setActiveTab] = useState('overview');
+
+  // Fetch real data from Supabase
+  const fetchVehicles = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('vehicles')
+      .select('*');
+    
+    if (error) {
+      console.error('Error fetching vehicles:', error);
+    } else {
+      setVehicles(data || mockVehicles);
+    }
+  }, []);
+
+  const fetchOperations = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('operations')
+      .select('*');
+    
+    if (error) {
+      console.error('Error fetching operations:', error);
+    } else {
+      setOperations(data || mockOperations);
+    }
+  }, []);
+
+  const fetchSubcontractors = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('subcontractors')
+      .select('*');
+    
+    if (error) {
+      console.error('Error fetching subcontractors:', error);
+    } else {
+      setSubcontractors(data || mockSubcontractors);
+    }
+  }, []);
+
+  const fetchMaintenance = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('maintenance')
+      .select('*');
+    
+    if (error) {
+      console.error('Error fetching maintenance:', error);
+    } else {
+      setMaintenance(data || mockMaintenance);
+    }
+  }, []);
+
+  // Set up real-time subscriptions
+  useEffect(() => {
+    // Fetch initial data
+    fetchVehicles();
+    fetchOperations();
+    fetchSubcontractors();
+    fetchMaintenance();
+
+    // Set up real-time listeners
+    const vehicleSubscription = supabase
+      .channel('vehicles-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'vehicles',
+        },
+        (payload) => {
+          setVehicles((prev) => [...prev, payload.new]);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'vehicles',
+        },
+        (payload) => {
+          setVehicles((prev) =>
+            prev.map((vehicle) =>
+              vehicle.id === payload.new.id ? payload.new : vehicle
+            )
+          );
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'vehicles',
+        },
+        (payload) => {
+          setVehicles((prev) =>
+            prev.filter((vehicle) => vehicle.id !== payload.old.id)
+          );
+        }
+      )
+      .subscribe();
+
+    const operationsSubscription = supabase
+      .channel('operations-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'operations',
+        },
+        (payload) => {
+          setOperations((prev) => [...prev, payload.new]);
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'operations',
+        },
+        (payload) => {
+          setOperations((prev) =>
+            prev.map((operation) =>
+              operation.trip_number === payload.new.trip_number ? payload.new : operation
+            )
+          );
+        }
+      )
+      .subscribe();
+
+    // Clean up subscriptions
+    return () => {
+      supabase.removeChannel(vehicleSubscription);
+      supabase.removeChannel(operationsSubscription);
+    };
+  }, [fetchVehicles, fetchOperations, fetchSubcontractors, fetchMaintenance]);
 
   // Calculate KPIs
   const totalVehicles = vehicles.length;
@@ -87,6 +229,14 @@ function App() {
     }, [])
     .sort((a, b) => a.date.localeCompare(b.date));
 
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -100,9 +250,21 @@ function App() {
                 <p className="text-blue-100 text-sm">Operations Dashboard - Bouaké Port Authority</p>
               </div>
             </div>
-            <div className="text-right">
-              <p className="text-sm text-blue-100">Current Date</p>
-              <p className="font-semibold">October 28, 2025</p>
+            <div className="flex items-center space-x-4">
+              <div className="text-right">
+                <p className="text-sm text-blue-100">Current Date</p>
+                <p className="font-semibold">October 28, 2025</p>
+              </div>
+              <div className="flex items-center space-x-2">
+                <span className="text-sm">Welcome, {user?.email}</span>
+                <button
+                  onClick={handleSignOut}
+                  className="flex items-center space-x-1 bg-blue-700 hover:bg-blue-800 px-3 py-1 rounded-md transition-colors"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>Sign Out</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -485,6 +647,14 @@ function App() {
         )}
       </main>
     </div>
+  );
+}
+
+function App() {
+  return (
+    <ProtectedRoute>
+      <AppContent />
+    </ProtectedRoute>
   );
 }
 
